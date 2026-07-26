@@ -7,7 +7,9 @@ Safari, Windows Chrome, ...). The dashboard shows the LangGraph process as a
 live diagram, lets you pick the Claude model and retrieval depth, asks a
 question, and streams each node's execution via Server-Sent Events so you can
 watch the corrective loops (document filtering, query rewrites, answer
-regeneration) light up on the graph as they happen.
+regeneration) light up on the graph as they happen. Conditional-edge routing
+decisions (relevant? grounded? on-topic?) are surfaced as their own timeline
+steps, mirroring how LangGraph Studio distinguishes direct vs conditional edges.
 
     uv run python -m adaptive_rag.web --source <folder> [--host 0.0.0.0] [--port 8000]
 
@@ -23,6 +25,7 @@ import json
 import os
 import socket
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -64,6 +67,7 @@ def _allowed_models():
         return CLI_MODEL_IDS, DEFAULT_CLI_MODEL
     return MODEL_IDS, ANSWER_MODEL
 
+
 # Friendly labels + one-line descriptions for each node, shown in the timeline.
 NODE_LABELS = {
     "retrieve": ("검색 (retrieve)", "rag 인덱스에서 청크 검색"),
@@ -71,6 +75,29 @@ NODE_LABELS = {
     "transform_query": ("질의 재작성 (transform_query)", "질문을 더 나은 검색어로"),
     "generate": ("답변 생성 (generate)", "근거 기반 답변 생성"),
 }
+
+
+def _transition_note(prev: str, cur: str, doc_count: int) -> str:
+    """Explain the conditional-edge decision behind a `prev -> cur` transition.
+
+    The graph's routers (decide_to_generate, grade_generation) are edges, not
+    nodes, so their choice never shows up in `stream_mode="updates"`. But the
+    choice IS the observed transition, so we can reconstruct exactly why the
+    graph moved where it did and show it as a timeline "판정" (decision) row.
+    """
+    if prev == "grade_documents" and cur == "generate":
+        if doc_count:
+            return f"관련 문서 {doc_count}개 확보 → 답변 생성"
+        return "관련 문서 없음(재작성 예산 소진) → 그대로 답변 생성"
+    if prev == "grade_documents" and cur == "transform_query":
+        return "관련 문서 없음 → 질의 재작성 후 재검색"
+    if prev == "generate" and cur == "generate":
+        return "환각 의심(근거 부족) → 같은 문서로 답변 재생성"
+    if prev == "generate" and cur == "transform_query":
+        return "답변이 질문에 미부합 → 질의 재작성 후 재검색"
+    if prev == "transform_query" and cur == "retrieve":
+        return "재작성한 질의로 재검색"
+    return ""
 
 
 def _chunk_summary(chunk: Chunk) -> dict:
@@ -182,6 +209,8 @@ class Handler(BaseHTTPRequestHandler):
 
         graph = self.server.graph  # type: ignore[attr-defined]
         state: dict = {}
+        prev = "START"
+        last_ts = time.monotonic()
         try:
             for update in graph.stream(
                 {"question": question, "model": model, "k": k},
@@ -189,7 +218,16 @@ class Handler(BaseHTTPRequestHandler):
             ):
                 for node, partial in update.items():
                     state.update(partial)
-                    self._sse("node", _jsonify_update(node, partial))
+                    now = time.monotonic()
+                    payload = _jsonify_update(node, partial)
+                    payload["from"] = prev
+                    payload["elapsed_ms"] = int((now - last_ts) * 1000)
+                    note = _transition_note(prev, node, len(state.get("documents") or []))
+                    if note:
+                        payload["decision"] = note
+                    self._sse("node", payload)
+                    prev = node
+                    last_ts = now
             self._sse(
                 "done",
                 {
@@ -200,6 +238,7 @@ class Handler(BaseHTTPRequestHandler):
                     "rewrites": state.get("rewrites", 0),
                     "generations": state.get("generations", 0),
                     "model": model,
+                    "decision": "답변 검증 통과(근거 충실 · 질문 적합) → 완료",
                 },
             )
         except BrokenPipeError:
@@ -303,7 +342,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # Self-contained page: no external CSS/JS/fonts, works offline and on mobile.
-# Injected server-side: <!--MODEL_OPTIONS--> (dropdown), <!--DEFAULT_K--> (k).
+# Light/dark aware via prefers-color-scheme. Injected server-side:
+# <!--MODEL_OPTIONS--> (dropdown), <!--DEFAULT_K--> (k), <!--BACKEND_BANNER-->.
 PAGE = """<!doctype html>
 <html lang="ko">
 <head>
@@ -311,91 +351,144 @@ PAGE = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Adaptive RAG 대시보드</title>
 <style>
-  :root { color-scheme: dark; }
+  :root {
+    color-scheme: light dark;
+    --bg:#f4f6f9; --panel:#ffffff; --panel-2:#f1f4f8; --border:#e2e7ef;
+    --text:#182031; --muted:#5c6675; --faint:#8a93a2;
+    --accent:#2563eb; --accent-soft:#e0e9ff; --accent-line:#2563eb;
+    --node-bg:#ffffff; --active:#2563eb; --active-bg:#e0e9ff; --visited:#93b4f7;
+    --edge:#c3ccd9; --edge-cond:#b48bd8; --edge-active:#2563eb;
+    --good:#0f9d58; --good-soft:#e6f6ec; --good-border:#b6e0c6;
+    --warn:#c2620a; --danger:#dc2626; --danger-soft:#fdeaea;
+    --shadow:0 1px 2px rgba(20,30,60,.06), 0 6px 20px rgba(20,30,60,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0d0f14; --panel:#12151c; --panel-2:#171b23; --border:#242a35;
+      --text:#e6e9ef; --muted:#9aa4b2; --faint:#6b7482;
+      --accent:#3b82f6; --accent-soft:#16233b; --accent-line:#60a5fa;
+      --node-bg:#171b23; --active:#60a5fa; --active-bg:#16233b; --visited:#2b4a86;
+      --edge:#39414f; --edge-cond:#8b6fb0; --edge-active:#60a5fa;
+      --good:#34d399; --good-soft:#12261a; --good-border:#1f5a38;
+      --warn:#fbbf24; --danger:#f87171; --danger-soft:#2a1414;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.25);
+    }
+  }
   * { box-sizing: border-box; }
   body {
-    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: #0d0f14; color: #e6e9ef; line-height: 1.5;
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.55;
   }
-  a { color: inherit; text-decoration: none; }
+  a { color:inherit; text-decoration:none; }
 
-  .app { display: grid; grid-template-columns: 250px 1fr; min-height: 100vh; }
-  @media (max-width: 820px) { .app { grid-template-columns: 1fr; } }
+  .app { display:grid; grid-template-columns:264px 1fr; min-height:100vh; }
+  @media (max-width:860px) { .app { grid-template-columns:1fr; } }
 
   /* ---- Sidebar ---- */
   aside {
-    background: #12151c; border-right: 1px solid #232833; padding: 18px 16px;
-    position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto;
+    background:var(--panel); border-right:1px solid var(--border); padding:20px 18px;
+    position:sticky; top:0; align-self:start; height:100vh; overflow-y:auto;
   }
-  @media (max-width: 820px) { aside { position: static; height: auto; } }
-  .brand { font-size: 16px; font-weight: 700; }
-  .brand small { display: block; font-weight: 400; font-size: 11px; color: #8b94a3; margin-top: 3px; }
-  nav { margin: 18px 0; display: flex; flex-direction: column; gap: 2px; }
-  nav a { padding: 8px 10px; border-radius: 8px; font-size: 13px; color: #b7bfcc; }
-  nav a:hover { background: #1a1f28; color: #fff; }
-  .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #6b7482; margin: 16px 0 8px; }
-  .setting { margin-bottom: 12px; }
-  .setting label { display: block; font-size: 12px; color: #9aa4b2; margin-bottom: 4px; }
+  @media (max-width:860px) { aside { position:static; height:auto; } }
+  .brand { font-size:17px; font-weight:700; letter-spacing:-.01em; }
+  .brand .tag { display:inline-block; margin-left:6px; font-size:10px; font-weight:600;
+    color:var(--accent); background:var(--accent-soft); border-radius:6px; padding:1px 6px; vertical-align:middle; }
+  .brand small { display:block; font-weight:400; font-size:11.5px; color:var(--muted); margin-top:4px; }
+  .section-title { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint); margin:22px 0 9px; }
+  .setting { margin-bottom:13px; }
+  .setting label { display:block; font-size:12px; color:var(--muted); margin-bottom:5px; }
   select, input[type=number], input[type=text] {
-    width: 100%; padding: 9px 10px; font-size: 14px; border-radius: 8px;
-    border: 1px solid #2b303b; background: #171b23; color: #e6e9ef;
+    width:100%; padding:9px 11px; font-size:14px; border-radius:9px;
+    border:1px solid var(--border); background:var(--panel-2); color:var(--text);
   }
-  .banner { background: #12261a; border: 1px solid #1f5a38; color: #9fe7bf; border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-bottom: 12px; }
-  .banner small { color: #7bbd97; }
-  .legend { font-size: 12px; color: #9aa4b2; display: flex; flex-direction: column; gap: 6px; }
-  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
-  .dot.active { background: #60a5fa; }
-  .dot.visited { background: #1e3a8a; }
-  .dot.idle { background: #232833; border: 1px solid #2b303b; }
+  select:focus, input:focus { outline:2px solid var(--accent-soft); border-color:var(--accent); }
+  .banner { background:var(--good-soft); border:1px solid var(--good-border); color:var(--good);
+    border-radius:9px; padding:9px 11px; font-size:12px; margin-bottom:13px; }
+  .banner small { color:var(--good); opacity:.85; }
+  .legend { font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:7px; }
+  .legend .dot { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:7px; vertical-align:middle; }
+  .dot.active { background:var(--active); }
+  .dot.visited { background:var(--visited); }
+  .dot.idle { background:var(--panel-2); border:1px solid var(--border); }
 
   /* ---- Main ---- */
-  main { padding: 20px; max-width: 1000px; }
-  header.top h1 { margin: 0; font-size: 20px; }
-  header.top p { margin: 4px 0 0; font-size: 13px; color: #9aa4b2; }
-  section { margin-top: 24px; }
-  section > h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
-  section > h2 .num { background: #1e3a8a; color: #cfe0ff; font-size: 11px; border-radius: 999px; padding: 1px 8px; }
+  main { padding:26px 28px 60px; max-width:1040px; }
+  @media (max-width:860px) { main { padding:20px 16px 48px; } }
+  header.top h1 { margin:0; font-size:22px; letter-spacing:-.02em; }
+  header.top p { margin:6px 0 0; font-size:13.5px; color:var(--muted); max-width:70ch; }
+  section { margin-top:28px; }
+  section > h2 { font-size:13px; text-transform:uppercase; letter-spacing:.05em; color:var(--faint);
+    margin:0 0 12px; display:flex; align-items:center; gap:8px; }
 
-  .graphwrap { overflow-x: auto; background: #12151c; border: 1px solid #232833; border-radius: 12px; padding: 12px; }
-  svg .gnode rect { fill: #1a1e26; stroke: #2b303b; stroke-width: 1.5; transition: fill .2s, stroke .2s; }
-  svg .gnode text { fill: #c3c9d3; font-size: 12px; }
-  svg .gnode.visited rect { stroke: #3b6fd4; }
-  svg .gnode.active rect { fill: #1e3a8a; stroke: #60a5fa; stroke-width: 2.5; }
-  svg .gnode.active text { fill: #fff; }
-  svg .edge { stroke: #39414f; stroke-width: 1.6; fill: none; }
-  svg .elabel { fill: #7a8494; font-size: 10.5px; }
+  .graphwrap { overflow-x:auto; background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:16px; box-shadow:var(--shadow); }
+  svg .gnode rect { fill:var(--node-bg); stroke:var(--border); stroke-width:1.5; transition:fill .25s, stroke .25s; }
+  svg .gnode text { fill:var(--muted); font-size:12.5px; font-weight:600; transition:fill .25s; }
+  svg .gnode.visited rect { stroke:var(--visited); }
+  svg .gnode.visited text { fill:var(--text); }
+  svg .gnode.active rect { fill:var(--active-bg); stroke:var(--active); stroke-width:2.5; }
+  svg .gnode.active text { fill:var(--active); }
+  svg .term rect { fill:var(--panel-2); }
+  svg .edge { stroke:var(--edge); stroke-width:1.7; fill:none; transition:stroke .25s, stroke-width .25s; }
+  svg .edge.cond { stroke:var(--edge-cond); stroke-dasharray:5 4; }
+  svg .edge.edge-active { stroke:var(--edge-active); stroke-width:3.2; stroke-dasharray:none; }
+  svg .elabel { fill:var(--faint); font-size:10.5px; }
 
-  form.ask { display: flex; gap: 8px; }
-  form.ask input[type=text] { flex: 1; padding: 12px; font-size: 16px; }
+  form.ask { display:flex; gap:9px; }
+  form.ask input[type=text] { flex:1; padding:13px 14px; font-size:16px; }
   form.ask button {
-    padding: 12px 18px; font-size: 15px; border: 0; border-radius: 10px;
-    background: #3b82f6; color: #fff; font-weight: 600; cursor: pointer;
+    padding:13px 20px; font-size:15px; border:0; border-radius:11px;
+    background:var(--accent); color:#fff; font-weight:600; cursor:pointer; white-space:nowrap;
   }
-  form.ask button:disabled { opacity: .5; cursor: default; }
+  form.ask button:disabled { opacity:.5; cursor:default; }
+  .examples { margin-top:10px; display:flex; flex-wrap:wrap; gap:7px; }
+  .chip { font-size:12px; color:var(--muted); background:var(--panel); border:1px solid var(--border);
+    border-radius:999px; padding:5px 12px; cursor:pointer; }
+  .chip:hover { border-color:var(--accent); color:var(--accent); }
 
-  .card { background: #12151c; border: 1px solid #232833; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
-  .card h3 { margin: 0 0 4px; font-size: 14px; }
-  .card .desc { font-size: 12px; color: #9aa4b2; margin-bottom: 6px; }
-  .doc { font-size: 12px; color: #c3c9d3; padding: 4px 0; border-top: 1px solid #202632; }
-  .doc .path { color: #7dd3fc; }
-  .badge { display: inline-block; font-size: 11px; color: #9aa4b2; background: #1a1f28; border-radius: 6px; padding: 1px 7px; margin: 2px 4px 2px 0; }
-  #timeline:empty::after { content: "질문하면 각 노드 실행이 여기에 표시됩니다."; color: #6b7280; font-size: 13px; }
+  .status { margin-top:14px; font-size:13px; color:var(--muted); display:none; align-items:center; gap:8px; }
+  .status.run, .status.ok, .status.err { display:flex; }
+  .status .spin { width:13px; height:13px; border-radius:50%; border:2px solid var(--border);
+    border-top-color:var(--accent); animation:spin .7s linear infinite; }
+  .status.ok { color:var(--good); } .status.ok .spin { display:none; }
+  .status.err { color:var(--danger); } .status.err .spin { display:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 
-  #answer { white-space: pre-wrap; background: #10141b; border: 1px solid #2b303b; border-radius: 12px; padding: 14px; }
-  #answer.empty { color: #6b7280; }
-  #answer.err { color: #f87171; }
-  .stats { font-size: 12px; color: #9aa4b2; margin-top: 8px; }
+  #timeline { display:flex; flex-direction:column; gap:9px; }
+  #timeline:empty::after { content:"질문하면 각 노드 실행과 라우팅 판정이 여기에 표시됩니다.";
+    color:var(--faint); font-size:13px; }
+  .router { font-size:12.5px; color:var(--muted); padding:2px 2px 2px 12px; border-left:2px dashed var(--edge-cond);
+    margin-left:8px; }
+  .router .rtag { font-size:10px; font-weight:700; color:var(--edge-cond); text-transform:uppercase;
+    letter-spacing:.04em; margin-right:6px; }
+  .card { background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; box-shadow:var(--shadow); }
+  .card .chead { display:flex; align-items:center; gap:8px; }
+  .card .cicon { width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center;
+    background:var(--accent-soft); border-radius:6px; font-size:12px; }
+  .card h3 { margin:0; font-size:14px; flex:1; }
+  .card .ms { font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums; }
+  .card .desc { font-size:12px; color:var(--muted); margin:4px 0 0; }
+  .badges { margin-top:7px; display:flex; flex-wrap:wrap; gap:5px; }
+  .badge { display:inline-block; font-size:11px; color:var(--muted); background:var(--panel-2);
+    border:1px solid var(--border); border-radius:6px; padding:2px 8px; }
+  .doc { font-size:12px; color:var(--text); padding:7px 0 0; margin-top:7px; border-top:1px solid var(--border); }
+  .doc .path { color:var(--accent); font-weight:600; word-break:break-all; }
+  .doc .prev { color:var(--muted); margin-top:3px; }
+
+  #answer { white-space:pre-wrap; background:var(--panel); border:1px solid var(--border);
+    border-radius:12px; padding:16px; box-shadow:var(--shadow); }
+  #answer.empty { color:var(--faint); }
+  #answer.err { color:var(--danger); background:var(--danger-soft); border-color:var(--danger); }
+  .stats { font-size:12px; color:var(--muted); margin-top:10px; }
+  .stats .srcs { margin-top:7px; display:flex; flex-wrap:wrap; gap:5px; align-items:center; }
 </style>
 </head>
 <body>
 <div class="app">
   <aside>
-    <div class="brand">Adaptive RAG<small>LangGraph 대시보드</small></div>
-    <nav>
-      <a href="#graph">그래프 구조</a>
-      <a href="#run">질문 · 실행 흐름</a>
-      <a href="#answer-sec">답변</a>
-    </nav>
+    <div class="brand">Adaptive RAG<span class="tag">LangGraph</span><small>Corrective / Adaptive RAG 대시보드</small></div>
+    <nav></nav>
     <div class="section-title">설정</div>
     <!--BACKEND_BANNER-->
     <div class="setting">
@@ -417,142 +510,171 @@ PAGE = """<!doctype html>
   <main>
     <header class="top">
       <h1>Adaptive RAG 대시보드</h1>
-      <p>로컬 rag 라이브러리로 검색하고, Claude로 평가·재작성·생성·검증하는 그래프를 실시간으로 관찰합니다.</p>
+      <p>로컬 rag 라이브러리로 검색하고, Claude로 평가·재작성·생성·검증하는 LangGraph를 실시간으로 관찰합니다. 점선은 조건부 엣지(라우터)이며, 실행되면 경로와 판정 이유가 함께 표시됩니다.</p>
     </header>
 
     <section id="graph">
-      <h2><span class="num">구조</span>LangGraph 프로세스</h2>
+      <h2>LangGraph 프로세스</h2>
       <div class="graphwrap">
-        <svg viewBox="0 0 820 300" width="100%" style="min-width:640px" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 880 320" width="100%" style="min-width:660px" xmlns="http://www.w3.org/2000/svg">
           <defs>
-            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-              <path d="M0,0 L8,4 L0,8 z" fill="#39414f"/>
+            <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+              <path d="M0,0 L9,4.5 L0,9 z" fill="var(--edge)"/>
             </marker>
           </defs>
-          <!-- edges -->
-          <path class="edge" marker-end="url(#arrow)" d="M105,45 L105,68"/>
-          <path class="edge" marker-end="url(#arrow)" d="M170,93 L228,93"/>
-          <path class="edge" marker-end="url(#arrow)" d="M382,93 L468,93"/>
-          <text class="elabel" x="392" y="86">관련 있음</text>
-          <path class="edge" marker-end="url(#arrow)" d="M305,116 L305,183"/>
-          <text class="elabel" x="312" y="152">관련 없음</text>
-          <path class="edge" marker-end="url(#arrow)" d="M230,208 L112,208 L105,120"/>
-          <text class="elabel" x="140" y="223">재검색</text>
-          <path class="edge" marker-end="url(#arrow)" d="M602,93 L668,93"/>
-          <text class="elabel" x="612" y="86">충분</text>
-          <path class="edge" marker-end="url(#arrow)" d="M505,70 C505,32 565,32 560,68"/>
-          <text class="elabel" x="486" y="26">환각 → 재생성</text>
-          <path class="edge" marker-end="url(#arrow)" d="M535,116 C535,208 470,208 384,208"/>
-          <text class="elabel" x="430" y="235">미해결 → 재작성</text>
+          <!-- edges (solid = direct, dashed .cond = conditional/router) -->
+          <path class="edge" id="edge-START-retrieve" marker-end="url(#arrow)" d="M105,58 L105,88"/>
+          <path class="edge" id="edge-retrieve-grade_documents" marker-end="url(#arrow)" d="M172,111 L232,111"/>
+          <path class="edge cond" id="edge-grade_documents-generate" marker-end="url(#arrow)" d="M400,111 L470,111"/>
+          <text class="elabel" x="405" y="103">관련 있음</text>
+          <path class="edge cond" id="edge-grade_documents-transform_query" marker-end="url(#arrow)" d="M316,136 L316,216"/>
+          <text class="elabel" x="322" y="182">관련 없음</text>
+          <path class="edge" id="edge-transform_query-retrieve" marker-end="url(#arrow)" d="M232,241 L105,241 L105,136"/>
+          <text class="elabel" x="118" y="258">재검색</text>
+          <path class="edge cond" id="edge-generate-END" marker-end="url(#arrow)" d="M610,111 L700,111"/>
+          <text class="elabel" x="616" y="103">검증 통과</text>
+          <path class="edge cond" id="edge-generate-generate" marker-end="url(#arrow)" d="M514,88 C514,46 566,46 566,86"/>
+          <text class="elabel" x="486" y="40">환각 → 재생성</text>
+          <path class="edge cond" id="edge-generate-transform_query" marker-end="url(#arrow)" d="M540,136 C540,241 470,241 400,241"/>
+          <text class="elabel" x="430" y="260">미부합 → 재작성</text>
           <!-- nodes -->
-          <g class="gnode" id="g-START"><rect x="45" y="16" width="120" height="30" rx="15"/><text x="105" y="35" text-anchor="middle">START</text></g>
-          <g class="gnode" id="g-retrieve"><rect x="40" y="70" width="130" height="46" rx="10"/><text x="105" y="97" text-anchor="middle">retrieve</text></g>
-          <g class="gnode" id="g-grade_documents"><rect x="230" y="70" width="152" height="46" rx="10"/><text x="306" y="97" text-anchor="middle">grade_documents</text></g>
-          <g class="gnode" id="g-generate"><rect x="470" y="70" width="132" height="46" rx="10"/><text x="536" y="97" text-anchor="middle">generate</text></g>
-          <g class="gnode" id="g-END"><rect x="668" y="77" width="92" height="32" rx="16"/><text x="714" y="97" text-anchor="middle">END</text></g>
-          <g class="gnode" id="g-transform_query"><rect x="230" y="185" width="152" height="46" rx="10"/><text x="306" y="212" text-anchor="middle">transform_query</text></g>
+          <g class="gnode term" id="g-START"><rect x="40" y="28" width="130" height="30" rx="15"/><text x="105" y="47" text-anchor="middle">START</text></g>
+          <g class="gnode" id="g-retrieve"><rect x="40" y="88" width="132" height="48" rx="11"/><text x="106" y="116" text-anchor="middle">retrieve</text></g>
+          <g class="gnode" id="g-grade_documents"><rect x="232" y="88" width="168" height="48" rx="11"/><text x="316" y="116" text-anchor="middle">grade_documents</text></g>
+          <g class="gnode" id="g-generate"><rect x="470" y="88" width="140" height="48" rx="11"/><text x="540" y="116" text-anchor="middle">generate</text></g>
+          <g class="gnode term" id="g-END"><rect x="700" y="94" width="96" height="36" rx="18"/><text x="748" y="116" text-anchor="middle">END</text></g>
+          <g class="gnode" id="g-transform_query"><rect x="232" y="216" width="168" height="48" rx="11"/><text x="316" y="244" text-anchor="middle">transform_query</text></g>
         </svg>
       </div>
     </section>
 
     <section id="run">
-      <h2><span class="num">실행</span>질문</h2>
+      <h2>질문</h2>
       <form class="ask" id="f">
-        <input id="q" type="text" placeholder="질문을 입력하세요" autocomplete="off">
+        <input id="q" type="text" placeholder="예: 커밋 전에 무엇을 확인해야 하나요?" autocomplete="off">
         <button id="go" type="submit">질문</button>
       </form>
-      <h2 style="margin-top:18px"><span class="num">흐름</span>실행 흐름</h2>
+      <div class="examples" id="examples"></div>
+      <div class="status" id="status"><span class="spin"></span><span id="status-text"></span></div>
+    </section>
+
+    <section id="flow">
+      <h2>실행 흐름 · 라우팅 판정</h2>
       <div id="timeline"></div>
     </section>
 
     <section id="answer-sec">
-      <h2><span class="num">결과</span>답변</h2>
+      <h2>답변</h2>
       <div id="answer" class="empty">아직 질문하지 않았습니다.</div>
       <div id="stats" class="stats"></div>
     </section>
   </main>
 </div>
 <script>
-const f = document.getElementById('f');
-const q = document.getElementById('q');
-const go = document.getElementById('go');
-const modelSel = document.getElementById('model');
-const kInput = document.getElementById('k');
-const timeline = document.getElementById('timeline');
-const answer = document.getElementById('answer');
-const stats = document.getElementById('stats');
-let es = null;
+const f=document.getElementById('f'), q=document.getElementById('q'), go=document.getElementById('go');
+const modelSel=document.getElementById('model'), kInput=document.getElementById('k');
+const timeline=document.getElementById('timeline'), answer=document.getElementById('answer');
+const stats=document.getElementById('stats');
+const statusEl=document.getElementById('status'), statusText=document.getElementById('status-text');
+let es=null, t0=0, lastNode='START';
 
-function clearGraph() {
-  document.querySelectorAll('.gnode').forEach(n => n.classList.remove('active', 'visited'));
+const ICON={retrieve:'🔍',grade_documents:'✓',transform_query:'✏️',generate:'✨'};
+const EXAMPLES=['이 프로젝트는 무엇인가요?','커밋 전에 무엇을 확인해야 하나요?','실행 방법을 알려줘'];
+
+const exWrap=document.getElementById('examples');
+for(const t of EXAMPLES){
+  const b=document.createElement('button'); b.type='button'; b.className='chip'; b.textContent=t;
+  b.addEventListener('click',()=>{q.value=t; q.focus();});
+  exWrap.appendChild(b);
+}
+
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function resetGraph(){
+  document.querySelectorAll('.gnode').forEach(n=>n.classList.remove('active','visited'));
+  document.querySelectorAll('.edge').forEach(e=>e.classList.remove('edge-active'));
   document.getElementById('g-START').classList.add('visited');
 }
-function setActive(name) {
-  document.querySelectorAll('.gnode').forEach(n => n.classList.remove('active'));
-  const el = document.getElementById('g-' + name);
-  if (el) { el.classList.add('active', 'visited'); }
+function activate(name){
+  document.querySelectorAll('.gnode').forEach(n=>n.classList.remove('active'));
+  const el=document.getElementById('g-'+name);
+  if(el) el.classList.add('active','visited');
 }
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function lightEdge(a,b){
+  document.querySelectorAll('.edge').forEach(e=>e.classList.remove('edge-active'));
+  const e=document.getElementById('edge-'+a+'-'+b);
+  if(e) e.classList.add('edge-active');
 }
+function setStatus(cls,text){ statusEl.className='status '+cls; statusText.textContent=text; }
 
-function card(ev) {
-  const d = document.createElement('div');
-  d.className = 'card';
-  let html = '<h3>' + ev.label + '</h3>';
-  if (ev.description) html += '<div class="desc">' + ev.description + '</div>';
-  if (ev.query !== undefined) html += '<span class="badge">검색어: ' + escapeHtml(ev.query) + '</span>';
-  if (ev.rewrites !== undefined) html += '<span class="badge">재작성 ' + ev.rewrites + '회</span>';
-  if (ev.doc_count !== undefined) html += '<span class="badge">문서 ' + ev.doc_count + '개</span>';
-  if (ev.generation !== undefined) html += '<span class="badge">생성 #' + (ev.generations || 1) + '</span>';
-  if (ev.documents) {
-    for (const doc of ev.documents) {
-      html += '<div class="doc"><span class="path">[' + escapeHtml(doc.path) + ']</span> '
-            + '<span class="badge">score ' + doc.score + '</span><br>' + escapeHtml(doc.preview) + '</div>';
+function routerRow(note){
+  const d=document.createElement('div'); d.className='router';
+  d.innerHTML='<span class="rtag">판정</span>'+esc(note);
+  timeline.appendChild(d); d.scrollIntoView({block:'nearest'});
+}
+function nodeCard(ev){
+  const d=document.createElement('div'); d.className='card';
+  let h='<div class="chead"><span class="cicon">'+(ICON[ev.node]||'•')+'</span><h3>'+esc(ev.label)+'</h3>';
+  if(ev.elapsed_ms!=null) h+='<span class="ms">'+ev.elapsed_ms+' ms</span>';
+  h+='</div>';
+  if(ev.description) h+='<div class="desc">'+esc(ev.description)+'</div>';
+  const b=[];
+  if(ev.query!==undefined) b.push('검색어: '+esc(ev.query));
+  if(ev.doc_count!==undefined) b.push('문서 '+ev.doc_count+'개');
+  if(ev.rewrites!==undefined) b.push('재작성 '+ev.rewrites+'회');
+  if(ev.generation!==undefined) b.push('생성 #'+(ev.generations||1));
+  if(b.length) h+='<div class="badges">'+b.map(x=>'<span class="badge">'+x+'</span>').join('')+'</div>';
+  if(ev.documents&&ev.documents.length){
+    for(const doc of ev.documents){
+      h+='<div class="doc"><span class="path">'+esc(doc.path)+'</span> '
+       +'<span class="badge">score '+doc.score+'</span><div class="prev">'+esc(doc.preview)+'</div></div>';
     }
   }
-  d.innerHTML = html;
-  timeline.appendChild(d);
+  d.innerHTML=h; timeline.appendChild(d); d.scrollIntoView({block:'nearest'});
 }
 
-f.addEventListener('submit', e => {
+f.addEventListener('submit', e=>{
   e.preventDefault();
-  const question = q.value.trim();
-  if (!question) return;
-  if (es) es.close();
-  timeline.innerHTML = '';
-  answer.className = 'empty';
-  answer.textContent = '실행 중…';
-  stats.textContent = '';
-  clearGraph();
-  go.disabled = true;
+  const question=q.value.trim(); if(!question) return;
+  if(es) es.close();
+  timeline.innerHTML=''; answer.className='empty'; answer.textContent='실행 중…';
+  stats.textContent=''; resetGraph(); go.disabled=true;
+  setStatus('run','시작하는 중…'); t0=performance.now(); lastNode='START';
 
-  const url = '/stream?question=' + encodeURIComponent(question)
-            + '&model=' + encodeURIComponent(modelSel.value)
-            + '&k=' + encodeURIComponent(kInput.value || '5');
-  es = new EventSource(url);
-  es.addEventListener('node', e => {
-    const ev = JSON.parse(e.data);
-    setActive(ev.node);
-    card(ev);
+  const url='/stream?question='+encodeURIComponent(question)
+          +'&model='+encodeURIComponent(modelSel.value)
+          +'&k='+encodeURIComponent(kInput.value||'5');
+  es=new EventSource(url);
+  es.addEventListener('node', e=>{
+    const ev=JSON.parse(e.data);
+    lightEdge(ev.from||lastNode, ev.node);
+    if(ev.decision) routerRow(ev.decision);
+    activate(ev.node); nodeCard(ev);
+    setStatus('run','실행 중: '+ev.label);
+    if(ev.node==='generate' && ev.generation!==undefined){
+      answer.className=''; answer.textContent=ev.generation;
+    }
+    lastNode=ev.node;
   });
-  es.addEventListener('done', e => {
-    const d = JSON.parse(e.data);
-    setActive('END');
-    answer.className = '';
-    answer.textContent = d.generation || '(답변 없음)';
-    let s = '모델: ' + d.model + '  ·  재작성 ' + d.rewrites + '회 · 생성 ' + d.generations + '회';
-    if (d.sources && d.sources.length) s += '  ·  근거: ' + d.sources.join(', ');
-    stats.textContent = s;
-    go.disabled = false; es.close();
+  es.addEventListener('done', e=>{
+    const d=JSON.parse(e.data);
+    lightEdge(lastNode,'END'); activate('END');
+    if(d.decision) routerRow(d.decision);
+    answer.className=''; answer.textContent=d.generation||'(답변 없음)';
+    const total=Math.round(performance.now()-t0);
+    let s='모델 '+esc(d.model)+' · 재작성 '+d.rewrites+'회 · 생성 '+d.generations+'회 · 총 '+total+' ms';
+    stats.innerHTML='<div>'+s+'</div>';
+    if(d.sources&&d.sources.length){
+      stats.innerHTML+='<div class="srcs">근거: '+d.sources.map(x=>'<span class="badge">'+esc(x)+'</span>').join('')+'</div>';
+    }
+    setStatus('ok','완료 · '+total+' ms');
+    go.disabled=false; es.close();
   });
-  es.addEventListener('error', e => {
-    answer.className = 'err';
-    try { answer.textContent = '오류: ' + JSON.parse(e.data).message; }
-    catch (_) { answer.textContent = '연결 오류'; }
-    go.disabled = false; es.close();
+  es.addEventListener('error', e=>{
+    answer.className='err';
+    try{ answer.textContent='오류: '+JSON.parse(e.data).message; }
+    catch(_){ answer.textContent='연결 오류'; }
+    setStatus('err','오류가 발생했습니다');
+    go.disabled=false; es.close();
   });
 });
 </script>

@@ -35,7 +35,7 @@
 - **외부 서비스**: Claude API(그래프 실행 시). 임베딩 모델은 `rag` 라이브러리가 최초 1회 Hugging Face Hub에서 내려받음(이후 오프라인).
 - **로컬 전제조건**: Python 3.11 (`/opt/homebrew/bin/python3.11`, `uv`). `rag` 라이브러리는 GitHub git 의존성(`pyproject.toml` `[tool.uv.sources] rag = { git = "https://github.com/hustudy1/RAG.git", branch = "main" }`)이라 `uv sync`가 자동으로 받아온다(정확한 커밋은 `uv.lock`에 고정). **이 저장소만 클론해도 실행 가능**. RAG를 로컬에서 편집하며 개발할 땐 그 소스를 로컬 `path = "../RAG"`로 바꾸면 된다(pyproject 주석 참고). 기본 백엔드(claude-cli)는 로컬 `claude` CLI가 설치·로그인돼 있어야 함.
 - **건드리면 안 되는 리소스**: 없음
-- **승인이 필요한 작업**: `git init`/`commit`/`push` (실행 직전 사용자 승인 필요 — llm_wiki 규칙). 현재 이 프로젝트는 git 저장소가 아니다.
+- **승인이 필요한 작업**: `git commit`/`push` (실행 직전 사용자 승인 필요 — llm_wiki 규칙). **2026-07-26 `git init` + 첫 커밋(`db999a9`) 완료** — 이제 이 프로젝트는 git 저장소다(브랜치 `main`, 원격 `origin` = github.com/hustudy1/langgraph, 최초 push 완료).
 
 ## 4. 현재 상태 (최종 갱신: 2026-07-23)
 
@@ -56,6 +56,27 @@ end-to-end를 실제 검증했다(정답+근거, API 키 없음). 오프라인 p
 
 ## 5. 작업 로그 (최신이 위)
 
+### 2026-07-26 — 웹 대시보드 리디자인 (외부 LangGraph 대시보드 참고) + 원격 연결·push
+- **한 일**:
+  - 대시보드를 더 깔끔하고 기능이 제대로 동작하게 개선. 외부 레퍼런스(LangGraph Studio의 direct/conditional edge 구분, agent-chat-ui, AG-UI 스트리밍) 조사 후 **UX만 참고, 구현은 표준 라이브러리 그대로 유지**(계정·비용·의존성 없음 — 사용자 선호).
+  - `web.py` 개선:
+    - **라우팅 판정 노출**: `decide_to_generate`/`grade_generation`은 노드가 아니라 조건부 엣지라 기존 타임라인(`stream_mode="updates"`)에 안 보였음. 서버가 관측된 전이(prev→cur)로 결정을 역산해 `decision` 필드로 전송, 클라이언트가 "판정" 행으로 표시(`_transition_note`).
+    - **엣지 하이라이트**(각 엣지 id, 조건부 엣지 점선), **노드별 소요시간(ms)**, 상태 표시줄, **라이브 답변**(generate 산출 즉시 표시), **라이트/다크 자동 테마**(prefers-color-scheme), 예시 질문 칩.
+    - SSE 계약(node/done/error)은 유지하고 `decision`/`from`/`elapsed_ms` 필드만 추가 → 기존 테스트 그대로 통과.
+  - 미리보기 아티팩트(모의 실행 재생): https://claude.ai/code/artifact/aab6f83e-ee45-494d-96f7-7885f859c430
+  - 실행 문서 정리: RUN.md 간결화 + 폴더 예시 `langgraph`, GUIDE.md `cd langgraph`(도구/패키지 이름 `adaptive-rag`는 유지).
+  - **원격 연결 + 최초 push**: 저장소 이름 `langgraph`로 결정(사용자 GitHub 개인 저장소 `hustudy1/langgraph`, langchain-ai/langgraph와 무관). `git remote add origin` + `git push -u origin main`.
+- **결과**: `uv run pytest -q` → **18 passed**. 대시보드 렌더 확인. `main` → `origin/main` push.
+- **남은 것**: 사용자가 실제 브라우저에서 대시보드 실행 확인 예정("이후에 확인"). vendor 방식이라 llm_wiki 템플릿 upstream 동기화는 수동.
+
+### 2026-07-26 — langgraph git 저장소 생성 + 첫 커밋 (llm_wiki vendoring)
+- **한 일**:
+  - 사용자 승인 후 프로젝트 루트 `~/langgraph`에 `git init -b main` + 첫 커밋(`db999a9`, 27개 파일).
+  - **중첩돼 있던 `llm_wiki/`(별도 git 저장소, remote `hustudy1/llm_wiki`, origin/main과 동기화됨)를 vendor 방식으로 처리**: `llm_wiki/.git`을 트리 밖으로 옮겨 일반 파일 6개(HANDOVER.md 포함)로 langgraph 저장소에 직접 커밋. 이유: 이 저장소만 클론해도 CLAUDE.md의 `@llm_wiki/...` 참조가 그대로 동작하게. (환경 정책상 `rm -rf`가 차단돼 `.git`을 스크래치패드로 `mv`함 — 원본이 GitHub에 있어 안전.)
+  - 커밋 전 점검: `.venv`/`__pycache__`/`.pytest_cache`/`.claude/settings.local.json`/`.DS_Store`는 `.gitignore`로 제외됨 확인. 트리에 `.env`·키 파일 없음(비밀값 미포함).
+- **결과**: `main` 브랜치 첫 커밋 `db999a9` 완료. 원격 미설정, **push 미완**(사용자 승인 대기).
+- **남은 것**: GitHub 원격 저장소 생성 후 `git remote add` + `git push`(사용자 승인 필요). vendor 방식이라 llm_wiki를 upstream(`hustudy1/llm_wiki`)과 동기화하려면 앞으로 수동 복사 필요.
+
 ### 2026-07-24 — 이식성 정리 (git 공유용: 하드코딩 경로 제거 + rag를 git 의존성으로)
 - **한 일**:
   - 사용자가 "git에 올릴 프로그램인데 실행 환경도 그거에 맞게" 요청. 다른 사람이 이 저장소만 클론해서 실행 가능하도록 정리.
@@ -63,7 +84,7 @@ end-to-end를 실제 검증했다(정답+근거, API 키 없음). 오프라인 p
   - **하드코딩된 `~/...` 경로 제거**: `RUN.md`·`GUIDE.md`의 `cd ~/langgraph` → `cd adaptive-rag`(클론 폴더), RAG 폴더 전제조건/트러블슈팅을 "uv sync가 GitHub에서 자동 수신"으로 갱신, `claude` 절대경로 예시를 `.../claude`로 일반화. `web.py`의 게이트웨이 연결 오류 메시지에 있던 `cli_gateway.py` 절대경로 제거(일반 안내 + `--backend claude-cli` 대안 안내).
   - `README.md` 설치·구조 섹션을 git 의존성/클론 후 `uv sync`로 갱신.
 - **결과**: `uv sync`로 rag가 git에서 설치됨(venv의 site-packages, 더 이상 `../RAG` 아님). `uv run pytest -q` → 18 passed. 저장소 내 코드에 남은 `/Users/data1` 절대경로 없음(내부 로그성 문서인 HANDOVER의 일부 환경 사실 기록은 제외).
-- **남은 것**: langgraph 자체 `git init` + 첫 커밋/푸시(사용자 승인 필요). RAG의 최신 코드가 GitHub에 반영돼 있어야 git 의존성이 그 버전을 받음(현재 RAG 로컬=origin/main 일치).
+- **남은 것**: 원격 push (사용자 승인 필요) — `git init` + 첫 커밋은 2026-07-26 완료(`db999a9`). RAG의 최신 코드가 GitHub에 반영돼 있어야 git 의존성이 그 버전을 받음(현재 RAG 로컬=origin/main 일치).
 - **실패한 시도**: `rm 실행방법.md`(옛 한글 파일명 문서) 삭제는 권한 거부됨 → 사용자가 직접 삭제하기로.
 
 ### 2026-07-24 — claude CLI 직접 백엔드 추가 (웹에서 모델 선택 → 요청별 반영) + 실 검증
