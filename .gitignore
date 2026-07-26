@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv / venv
+.venv/
+
+# Local Claude Code settings (personal, not shared)
+.claude/settings.local.json
+
+# OS
+.DS_Store
