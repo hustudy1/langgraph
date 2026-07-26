@@ -1,83 +1,56 @@
 # How to Run (Quick Start)
 
-복사해서 터미널에 붙여넣으면 된다. 아래 명령은 **저장소를 클론한 폴더 안**에서 실행한다.
-(예시의 `adaptive-rag`는 `git clone` 후 생긴 폴더 이름이며, 저장소 이름에 따라 다를 수 있다.)
-
----
+클론한 폴더 안에서 실행한다. **API 키 없이** 로컬 `claude` CLI(구독 로그인)로 동작한다.
 
 ## 0. 준비 (처음 한 번만)
 
 ```bash
-cd adaptive-rag
+cd langgraph
 uv sync
 ```
 
-> API 키가 없어도 된다. 로컬 `claude` CLI(구독 로그인)를 그대로 쓰는 방식이 기본이다.
+> **폴더 이름 `langgraph`는?** `git clone`으로 내려받으면 생기는 폴더(= GitHub 저장소 이름
+> `langgraph`)이자 실행 기준 위치(프로젝트 루트)다. 아래 모든 명령은 이 폴더 **안에서** 실행한다.
+> 저장소를 다른 이름으로 만들었으면 그 이름으로 `cd` 한다. 이미 그 폴더 안이면 `cd`는 생략.
+>
+> 참고: **도구(파이썬 패키지) 이름은 `adaptive-rag`**, 실행 모듈은 `adaptive_rag`다 — 폴더/저장소
+> 이름(`langgraph`)과는 별개이므로, `python -m adaptive_rag ...` 명령의 `adaptive_rag`는 그대로 쓴다.
 
----
-
-## 방법 1 — 웹 대시보드 (추천)
+## 1. 웹 대시보드 (추천)
 
 ```bash
-cd adaptive-rag
 uv run python -m adaptive_rag.web --source llm_wiki --host 0.0.0.0 --backend claude-cli
 ```
 
-- `--source` 뒤는 **검색할 폴더**. 예시는 `llm_wiki`. 아무 폴더나 넣으면 된다.
-- 켜지면 터미널에 주소가 뜬다:
-  - 이 맥에서: 브라우저로 `http://127.0.0.1:8000`
-  - **아이폰/윈도우**에서: 같이 출력되는 `http://192.168.0.xx:8000` (같은 와이파이)
-- 화면 **왼쪽 드롭다운에서 모델(opus / sonnet / haiku)** 을 고르고, 질문을 입력한다.
-  고른 모델이 질문할 때마다 바로 적용된다.
-- **끄기**: 그 터미널에서 `Ctrl + C`.
+- `--source` = 검색할 폴더 · `--host 0.0.0.0` = 다른 기기 접속 허용 · `--port 8000`(기본)
+- 접속: 이 맥 `http://127.0.0.1:8000` / 다른 기기 `http://<출력된 IP>:8000`(같은 와이파이)
+- 왼쪽 드롭다운에서 모델(opus/sonnet/haiku) 선택 → 질문 · 끄기 `Ctrl+C`
 
----
-
-## 방법 2 — 명령줄에서 한 번 질문
+## 2. 명령줄에서 한 번 질문
 
 ```bash
-cd adaptive-rag
-uv run python -m adaptive_rag \
-  --source llm_wiki \
-  --query "커밋 전에 무엇을 확인해야 하나요?" \
-  --backend claude-cli --model sonnet
+uv run python -m adaptive_rag --source llm_wiki --query "커밋 전에 무엇을 확인해야 하나요?" --backend claude-cli --model sonnet
 ```
 
-- `--query` 에 질문을 쓴다.
-- `--model` 은 `opus` / `sonnet` / `haiku` 중 하나 (생략하면 `sonnet`).
-- 답변과 근거 파일이 화면에 출력된다.
+- `--model` = opus / sonnet / haiku (생략 시 sonnet)
 
----
+## (선택) API 키로 실행
 
-## 실행이 잘 됐는지 확인
-
-시작할 때 이 줄이 보이면 정상이다 (괄호 안 `claude` 경로는 환경마다 다르다):
-
-```
-백엔드: 로컬 claude CLI 직접 호출 (.../claude) — API 키 불필요, 모델 요청별 선택
-```
-
----
-
-## 자주 막히는 것 (짧게)
-
-| 증상 | 해결 |
-|---|---|
-| `Address already in use` (포트 충돌) | `--port 8123` 처럼 다른 번호를 붙인다 |
-| 아이폰/윈도우에서 접속 안 됨 | 같은 와이파이인지 확인 + 맥 `시스템 설정 → 네트워크 → 방화벽`에서 파이썬 허용 |
-| `claude CLI 를 찾을 수 없습니다` | 터미널에서 `claude --version` 이 되는지 확인. 안 되면 `claude` 로그인 필요 |
-| 첫 실행이 느림 | 검색용 모델을 최초 1회 내려받는 중(인터넷 필요). 이후엔 빠르다 |
-
----
-
-## (선택) API 키로 쓰고 싶다면
-
-`claude` CLI 대신 Anthropic API 키를 쓰려면, 위 명령에서 `--backend claude-cli` 를 빼고
-키만 넣으면 된다:
+`--backend claude-cli`를 빼고 키만 준다:
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-본인-키"
+export ANTHROPIC_API_KEY="sk-ant-..."
 uv run python -m adaptive_rag.web --source llm_wiki --host 0.0.0.0
 ```
 
-더 자세한 설명·트러블슈팅은 `GUIDE.md`, 옵션 전체는 `README.md` 참고.
+## 막히면
+
+| 증상 | 해결 |
+|---|---|
+| `Address already in use` | `--port 8123` 등 다른 포트 |
+| 다른 기기에서 접속 안 됨 | 같은 와이파이 + 맥 방화벽에서 파이썬 허용 |
+| `claude CLI 를 찾을 수 없습니다` | `claude --version` 확인, 안 되면 `claude` 로그인 |
+| 첫 실행이 느림 | 검색 모델 최초 1회 다운로드(이후 빠름) |
+
+> 정상이면 시작할 때 `백엔드: 로컬 claude CLI 직접 호출 ... — API 키 불필요` 줄이 뜬다.
+> 자세한 설명은 `GUIDE.md`, 옵션 전체는 `README.md`.

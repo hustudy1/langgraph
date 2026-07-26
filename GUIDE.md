@@ -35,7 +35,7 @@
 터미널을 열고 프로젝트 폴더로 이동한 뒤 의존성을 설치한다.
 
 ```bash
-cd adaptive-rag   # git clone 후 생긴 저장소 폴더
+cd langgraph   # git clone 후 생긴 저장소 폴더 (예: hustudy1/langgraph)
 uv sync
 ```
 
