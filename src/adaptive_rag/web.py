@@ -44,21 +44,31 @@ from adaptive_rag.config import (
 
 
 def _model_ui():
-    """(options, default_model, banner_html) for the active backend."""
+    """(options, default_model, banner_html) for the active backend.
+
+    A starting model can be preselected with the ADAPTIVE_RAG_WEB_MODEL env var
+    (set by --model). The dropdown still switches models live per request, so
+    this only decides which option starts selected.
+    """
     backend = llm.active_backend()
     if backend == "claude-cli":
+        models, default = CLI_MODELS, DEFAULT_CLI_MODEL
         banner = (
             '<div class="banner">로컬 claude CLI 직접 · API 키 불필요<br>'
             "<small>모델을 고르면 요청마다 바로 반영됩니다(게이트웨이 재시작 불필요).</small></div>"
         )
-        return CLI_MODELS, DEFAULT_CLI_MODEL, banner
-    if backend == "gateway":
+    elif backend == "gateway":
+        models, default = AVAILABLE_MODELS, ANSWER_MODEL
         banner = (
             '<div class="banner">CLI 게이트웨이 모드 · API 키 불필요<br>'
             "<small>모델은 게이트웨이 실행 옵션(--model)을 따릅니다. 아래 선택은 무시됩니다.</small></div>"
         )
-        return AVAILABLE_MODELS, ANSWER_MODEL, banner
-    return AVAILABLE_MODELS, ANSWER_MODEL, ""
+    else:
+        models, default, banner = AVAILABLE_MODELS, ANSWER_MODEL, ""
+    override = os.environ.get("ADAPTIVE_RAG_WEB_MODEL")
+    if override and override in {mid for mid, _label in models}:
+        default = override
+    return models, default, banner
 
 
 def _allowed_models():
@@ -137,9 +147,9 @@ def _friendly_error(exc: Exception) -> str:
         k in low for k in ("refused", "urlopen", "connection", "timed out", "게이트웨이")
     ):
         return (
-            "CLI 게이트웨이에 연결할 수 없습니다. `LLM_BASE_URL`이 가리키는 게이트웨이가 "
-            "실행 중인지 확인하세요(예: 다른 터미널에서 cli_gateway.py 를 --backend claude "
-            "--port 8765 로 실행). 별도 게이트웨이 없이 로컬 claude CLI 를 바로 쓰려면 "
+            "CLI 게이트웨이에 연결할 수 없습니다. `LLM_BASE_URL`이 가리키는 외부 "
+            "OpenAI 호환 게이트웨이(별도 프로그램, 이 저장소에 없음)가 실행 중인지 "
+            "확인하세요. 별도 게이트웨이 없이 로컬 claude CLI 를 바로 쓰려면 "
             "`LLM_BASE_URL`을 해제하고 `--backend claude-cli`로 실행하세요. "
             f"(원본 오류: {msg})"
         )
@@ -315,6 +325,12 @@ def main(argv: list[str] | None = None) -> int:
         "모델 요청별 선택), api=Anthropic API. 게이트웨이는 LLM_BASE_URL 로 자동 감지.",
     )
     parser.add_argument(
+        "--model",
+        default=None,
+        help="시작(기본 선택) 모델. claude-cli: opus/sonnet/haiku, api: 전체 ID. "
+        "대시보드 드롭다운에서 실행 후 실시간 변경 가능.",
+    )
+    parser.add_argument(
         "--embedding-model",
         default=None,
         help="rag 임베딩 모델 교체 (예: 다국어 모델).",
@@ -323,6 +339,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.backend != "auto":
         os.environ["ADAPTIVE_RAG_BACKEND"] = args.backend
+    if args.model:
+        os.environ["ADAPTIVE_RAG_WEB_MODEL"] = args.model
 
     kwargs = {"source_dir": args.source}
     if args.embedding_model:

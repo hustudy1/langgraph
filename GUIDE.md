@@ -86,10 +86,10 @@ uv run python -m adaptive_rag --source llm_wiki --query "질문" --backend claud
 
 시작 로그에 `백엔드: 로컬 claude CLI 직접 호출 ... — API 키 불필요`가 뜨면 성공이다.
 
-> 참고: `cli_gateway.py`(OpenAI 호환 프록시)를 이미 띄워 뒀다면 `export
-> LLM_BASE_URL=http://127.0.0.1:8765/v1` 로도 쓸 수 있다. 단 그 방식은 모델이 게이트웨이
-> 실행 옵션으로 고정되어 대시보드에서 못 바꾼다. 모델을 화면에서 바꾸려면 위 `claude-cli`
-> 방식을 쓴다.
+> 참고(선택): OpenAI 호환 프록시를 여는 **별도 프로그램**(이 저장소 밖, 예: 다른 프로젝트의
+> `cli_gateway.py`)을 이미 띄워 뒀다면 `export LLM_BASE_URL=http://127.0.0.1:8765/v1` 로도
+> 쓸 수 있다. 단 그 방식은 모델이 게이트웨이 실행 옵션으로 고정되어 대시보드에서 못 바꾼다.
+> 모델을 화면에서 바꾸려면 위 `claude-cli` 방식을 쓴다.
 
 ---
 
@@ -110,7 +110,7 @@ uv run python -m adaptive_rag --source llm_wiki --query "커밋하기 전에 무
 - `--source`: 검색 대상 폴더. 아무 폴더나 가능(문서, 코드, 메모 등).
 - `--query`: 질문.
 - `--model` (선택): 쓸 Claude 모델. 예: `--model claude-haiku-4-5` (더 빠르고 저렴).
-  안 쓰면 `claude-opus-4-8`.
+  안 쓰면 `claude-opus-5-5`.
 - `--k` (선택): 검색 문서 수 (기본 5).
 
 결과는 이렇게 나온다:
@@ -154,7 +154,7 @@ Ctrl+C 로 종료
 ### 5-2. 화면 사용법
 
 - **왼쪽 메뉴**의 "설정"에서 먼저 고른다:
-  - **Claude 모델** — 기본은 `Claude Opus 4.8`(가장 똑똑). 더 저렴하게 쓰려면
+  - **Claude 모델** — 기본은 `Claude Opus 5.5`(가장 똑똑). 더 저렴하게 쓰려면
     `Sonnet 5`나 `Haiku 4.5`, 최고 성능이 필요하면 `Fable 5`.
   - **검색 문서 수 (k)** — 한 번에 몇 개 청크를 가져올지(기본 5).
 - 가운데 **"그래프 구조"** 다이어그램에서 지금 어느 노드가 실행 중인지 색으로 보인다

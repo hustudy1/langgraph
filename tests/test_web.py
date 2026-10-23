@@ -50,7 +50,7 @@ def test_index_page_served(server):
     assert "Adaptive RAG" in html
     assert "/stream?question=" in html  # the SSE wiring is present
     assert 'id="model"' in html  # model dropdown present
-    assert "claude-opus-4-8" in html  # a model option was injected
+    assert "claude-opus-5-5" in html  # a model option was injected
     assert "<svg" in html  # the live graph diagram is rendered
 
 
@@ -73,3 +73,25 @@ def test_stream_emits_nodes_and_final_answer(server):
 def test_empty_question_streams_error(server):
     body = _get(server + "/stream?question=")
     assert "event: error" in body
+
+
+def test_start_model_preselected_via_env(monkeypatch):
+    # --model sets ADAPTIVE_RAG_WEB_MODEL, which preselects the dropdown option.
+    monkeypatch.setenv("ADAPTIVE_RAG_BACKEND", "api")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.setenv("ADAPTIVE_RAG_WEB_MODEL", "claude-haiku-4-5")
+    from adaptive_rag.web import render_page
+
+    html = render_page()
+    assert '<option value="claude-haiku-4-5" selected>' in html
+    assert '<option value="claude-opus-5-5" selected>' not in html  # default overridden
+
+
+def test_invalid_start_model_falls_back(monkeypatch):
+    monkeypatch.setenv("ADAPTIVE_RAG_BACKEND", "api")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+    monkeypatch.setenv("ADAPTIVE_RAG_WEB_MODEL", "not-a-real-model")
+    from adaptive_rag.web import render_page
+
+    html = render_page()
+    assert '<option value="claude-opus-5-5" selected>' in html  # falls back to default

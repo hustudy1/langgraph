@@ -58,8 +58,8 @@ uv run python -m adaptive_rag --source <폴더 경로> --query "질문" [--model
 
 - `--source`: 인덱싱·검색할 폴더 (아무 폴더나 가능)
 - `--query`: 답하고자 하는 질문
-- `--model` (선택): LLM 노드가 쓸 Claude 모델. `claude-opus-4-8`(기본) ·
-  `claude-sonnet-5` · `claude-haiku-4-5` · `claude-fable-5`
+- `--model` (선택): LLM 노드가 쓸 Claude 모델. `claude-opus-5-5`(기본) ·
+  `claude-sonnet-5-5` · `claude-haiku-4-5` · `claude-fable-5-1`
 - `--k` (선택): 검색당 가져올 청크 수 (기본 5)
 - `--embedding-model` (선택): `rag`의 임베딩 모델 교체 (예: 한국어 비중이 크면
   `paraphrase-multilingual-MiniLM-L12-v2`)
@@ -121,20 +121,21 @@ LLM 호출 백엔드는 다음 우선순위로 정해진다. `--backend`(또는 
    # 또는 API 키·LLM_BASE_URL 이 없으면 --backend 없이도 자동으로 claude-cli 가 된다.
    ```
 
-2. **`gateway` — OpenAI 호환 프록시 (`LLM_BASE_URL` 설정 시, API 키 불필요)**
-   `cli_gateway.py` 같은 `/v1/chat/completions` 프록시로 보낸다. 이 경우 **모델은 게이트웨이
-   실행 옵션(`--model`)으로 고정**되며 대시보드 선택은 무시된다.
+2. **`gateway` — 외부 OpenAI 호환 프록시 (선택 · `LLM_BASE_URL` 설정 시, API 키 불필요)**
+   `/v1/chat/completions`를 여는 **별도 프로그램**(이 저장소에는 포함되지 않음 — 예: 다른
+   프로젝트의 `cli_gateway.py`)으로 보낸다. 이 경우 **모델은 게이트웨이 실행 옵션으로 고정**되어
+   대시보드 선택은 무시된다. 대부분 `claude-cli`로 충분하므로 필수는 아니다.
    ```bash
-   # 터미널 1
-   python3.11 /path/to/cli_gateway.py --backend claude --port 8765 --model sonnet
-   # 터미널 2
+   # 터미널 1: 별도 게이트웨이 프로그램을 직접 실행 (이 저장소 밖)
+   #   예: python3.11 /path/to/cli_gateway.py --backend claude --port 8765 --model sonnet
+   # 터미널 2:
    export LLM_BASE_URL=http://127.0.0.1:8765/v1
    uv run python -m adaptive_rag.web --source <폴더> --host 0.0.0.0
    ```
 
 3. **`api` — Anthropic API (`ANTHROPIC_API_KEY` 필요)**
    `anthropic` SDK로 Claude API 호출. 평가 노드는 구조화 출력(structured outputs)으로
-   정확히 파싱한다. 모델은 전체 ID(`claude-opus-4-8` 등).
+   정확히 파싱한다. 모델은 전체 ID(`claude-opus-5-5` 등).
 
 자동 선택 순서: 명시(`--backend`) → `LLM_BASE_URL` 있으면 gateway → `ANTHROPIC_API_KEY`
 있으면 api → 로컬 `claude` 있으면 claude-cli → api. `anthropic` SDK는 api 경로에서만 지연
@@ -143,7 +144,7 @@ import되므로 나머지 두 경로는 SDK도 키도 필요 없다. 텍스트 �
 
 ## 구성
 
-- **LLM 모델**: 기본 `claude-opus-4-8` (문서 관련성 평가, 질의 재작성, 답변 생성, 답변 검증).
+- **LLM 모델**: 기본 `claude-opus-5-5` (문서 관련성 평가, 질의 재작성, 답변 생성, 답변 검증).
   `rag` 라이브러리가 자체 답변 생성에 쓰는 모델과 동일하게 맞춰 두 프로젝트가 어긋나지 않게 했다.
   실행할 때마다 CLI `--model` 또는 대시보드 드롭다운으로 바꿀 수 있다(후보는
   `config.py`의 `AVAILABLE_MODELS`). 모델·검색 문서 수(k)는 그래프 상태로 전달되므로

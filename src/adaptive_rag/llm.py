@@ -4,21 +4,25 @@ Every call to Claude in this project goes through one of the functions here, so
 model choice, prompt wording, and response parsing live in one file and the
 graph nodes stay about control flow.
 
-Two backends are supported and chosen automatically per call:
+Three backends are supported, chosen automatically per call (see
+`active_backend` for the priority order):
 
-- **Anthropic API** (default): the official `anthropic` SDK against the Claude
+- **Anthropic API** (`api`): the official `anthropic` SDK against the Claude
   API. Grading uses structured outputs (boolean JSON) for exact parsing.
   Requires ANTHROPIC_API_KEY.
-- **CLI gateway** (when `LLM_BASE_URL` is set): an OpenAI-compatible
-  `/v1/chat/completions` proxy such as `cli_gateway.py`, which fronts the local
-  `claude`/`codex` CLI using subscription auth -- no API key needed. The gateway
-  returns plain text, so grading falls back to a "reply yes/no" prompt that we
-  parse leniently. Set it up with:
+- **Local claude CLI** (`claude-cli`): shells out to a local `claude` CLI with
+  subscription auth -- no API key needed, and the model is chosen per call.
+  Returns plain text, so grading uses a lenient "reply yes/no" prompt.
+- **CLI gateway** (`gateway`, optional; when `LLM_BASE_URL` is set): a separate
+  OpenAI-compatible `/v1/chat/completions` proxy that is NOT part of this repo
+  (e.g. another project's `cli_gateway.py`). Also key-free, but the model is
+  fixed by however the gateway was started, so `claude-cli` usually makes it
+  unnecessary. Enable with:
 
       export LLM_BASE_URL=http://127.0.0.1:8765/v1
 
-`anthropic` is imported lazily and only on the Anthropic path, so the gateway
-path needs neither the SDK nor an API key.
+`anthropic` is imported lazily and only on the Anthropic path, so the key-free
+paths (claude-cli, gateway) need neither the SDK nor an API key.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from rag import Chunk
 from adaptive_rag.config import (
     ANSWER_MAX_TOKENS,
     ANSWER_MODEL,
+    DEFAULT_CLI_MODEL,
     GRADING_MAX_TOKENS,
 )
 
@@ -113,6 +118,11 @@ def backend_description() -> str:
     if backend == "claude-cli":
         return f"로컬 claude CLI 직접 호출 ({_find_claude()}) — API 키 불필요, 모델 요청별 선택"
     return f"Anthropic API — 기본 모델 {ANSWER_MODEL}, ANTHROPIC_API_KEY 필요"
+
+
+def default_model() -> str:
+    """A sensible default model id for the active backend."""
+    return DEFAULT_CLI_MODEL if active_backend() == "claude-cli" else ANSWER_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +269,16 @@ def _boolean(prompt: str, field: str, model: str) -> bool:
     # Text backends can't do structured outputs -> ask for yes/no and parse.
     text = _text_complete(prompt + "\n\nReply with exactly one word: yes or no.", model)
     return _parse_bool(text)
+
+
+def complete(prompt: str, model: str | None = None, max_tokens: int = ANSWER_MAX_TOKENS) -> str:
+    """Backend-neutral plain-text completion (api / gateway / claude-cli).
+
+    General-purpose helper for callers that just want text from Claude without
+    the RAG-specific prompting. `model=None` picks a default for the active
+    backend. Used e.g. by the standalone LangGraph examples in `examples/`.
+    """
+    return _complete(prompt, model or default_model(), max_tokens)
 
 
 def _format_context(chunks: list[Chunk]) -> str:

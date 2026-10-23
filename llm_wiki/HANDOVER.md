@@ -21,13 +21,13 @@
 - **테스트**: `uv run pytest -q`
 - **린트/타입체크**: `[UNKNOWN]` — 아직 ruff/mypy 등 설정하지 않음
 - **수동 확인(실 API 호출)**: CLI `uv run python -m adaptive_rag --source <폴더> --query "<질문>"`, 또는 웹 대시보드 `uv run python -m adaptive_rag.web --source <폴더> [--host 0.0.0.0]` 후 브라우저 접속 — 둘 다 `ANTHROPIC_API_KEY` 필요
-- **마지막 검증**: 2026-07-24. `uv run pytest -q` → **18 passed** (오프라인, API 키 불필요; 그래프 6 + 대시보드 4 + 게이트웨이 4 + claude-cli 4). **claude-cli 백엔드로 end-to-end 실 검증 완료**: (1) 명령줄 `--backend claude-cli --model sonnet` → 정답, (2) 대시보드 `--backend claude-cli`에서 `/stream?...&model=haiku` 실호출 → done `"model":"haiku"` + 정답. 즉 웹에서 고른 모델이 실제 `claude` CLI 호출에 요청별로 반영됨. 이전 검증(게이트웨이 e2e)도 유효. **Anthropic API 경로 실 호출만 미검증**(코드 경로 동일).
+- **마지막 검증**: 2026-10-22. `uv run pytest -q` → **41 passed** (오프라인, API 키 불필요; 의존성 업그레이드 후, Anthropic SDK 왕복 테스트 2개 포함). 이전: 2026-07-24. `uv run pytest -q` → **18 passed** (오프라인, API 키 불필요; 그래프 6 + 대시보드 4 + 게이트웨이 4 + claude-cli 4). **claude-cli 백엔드로 end-to-end 실 검증 완료**: (1) 명령줄 `--backend claude-cli --model sonnet` → 정답, (2) 대시보드 `--backend claude-cli`에서 `/stream?...&model=haiku` 실호출 → done `"model":"haiku"` + 정답. 즉 웹에서 고른 모델이 실제 `claude` CLI 호출에 요청별로 반영됨. 이전 검증(게이트웨이 e2e)도 유효. **Anthropic API 경로 실 호출만 미검증**(코드 경로 동일).
 
 ## 3. 환경 / 주의사항
 
 - **LLM 백엔드(3가지, 자동 선택; `--backend` 또는 `ADAPTIVE_RAG_BACKEND`로 명시 시 최우선)**:
   - `claude-cli` — 로컬 `claude` CLI 직접 호출(구독 인증, **API 키 불필요**). 매 호출 `claude -p --output-format text --model <모델>`. **모델을 요청별로 선택 가능**(대시보드 드롭다운 opus/sonnet/haiku, CLI `--model`). 이게 사용자가 원하는 기본 사용 방식.
-  - `gateway` — `LLM_BASE_URL`(또는 `ADAPTIVE_RAG_LLM_BASE_URL`) 설정 시. OpenAI 호환 `/v1` 프록시(`cli_gateway.py`). API 키 불필요. **모델은 게이트웨이 실행 옵션으로 고정**(대시보드 선택 무시).
+  - `gateway` — `LLM_BASE_URL`(또는 `ADAPTIVE_RAG_LLM_BASE_URL`) 설정 시. OpenAI 호환 `/v1` 프록시(**외부 별도 프로그램, 이 저장소에 없음** — 예: 다른 프로젝트의 `cli_gateway.py`). API 키 불필요. **모델은 게이트웨이 실행 옵션으로 고정**(대시보드 선택 무시).
   - `api` — `ANTHROPIC_API_KEY` 설정 시. `anthropic` SDK, 구조화 출력.
   - 자동 선택 순서: 명시 → `LLM_BASE_URL` → `ANTHROPIC_API_KEY` → 로컬 `claude` 존재 → api.
   - `claude` CLI 경로 override: `CLAUDE_CLI_PATH`.
@@ -37,7 +37,12 @@
 - **건드리면 안 되는 리소스**: 없음
 - **승인이 필요한 작업**: `git commit`/`push` (실행 직전 사용자 승인 필요 — llm_wiki 규칙). **2026-07-26 `git init` + 첫 커밋(`db999a9`) 완료** — 이제 이 프로젝트는 git 저장소다(브랜치 `main`, 원격 `origin` = github.com/hustudy1/langgraph, 최초 push 완료).
 
-## 4. 현재 상태 (최종 갱신: 2026-07-23)
+## 4. 현재 상태 (최종 갱신: 2026-10-22)
+
+2026-07-26~30 작업(대시보드 런처, RAG 없는 자기 검토 루프 예제, 메뉴 통합 대시보드, 작성자·검토자 모델 분리,
+멀티 에이전트 코딩 팀)을 2026-10-22에 정리해 한꺼번에 커밋했다. 의존성을 최신으로 올리고(langgraph 1.2.16,
+anthropic 2.1.0, rag는 기록 정리 후의 새 커밋), 기본 모델을 `claude-opus-5-5`로 바꿨다. 아래는 2026-07-23 기준 설명이다.
+
 
 Corrective/Adaptive RAG 그래프의 핵심 흐름을 구현 완료했다: retrieve(rag 검색) →
 grade_documents(관련성 필터) → 관련 문서 없으면 transform_query(질의 재작성) 후 재검색 →
@@ -55,6 +60,65 @@ end-to-end를 실제 검증했다(정답+근거, API 키 없음). 오프라인 p
 미검증** — 코드 경로 동일.
 
 ## 5. 작업 로그 (최신이 위)
+
+### 2026-10-22 — 미커밋 작업 정리, 의존성·모델 최신화, 개인정보 정리
+- **한 일**:
+  - 2026-07-26~30의 미커밋 작업(파일 21개)을 그대로 살려 커밋 준비. 문서 속 로컬 절대 경로를 `~/`로, 내부망 IP를 `192.168.x.x`로 바꿨다.
+  - 공개 저장소 커밋 기록의 작성자 이메일을 GitHub noreply로 바꾸고 경로를 지웠다(기록 재작성, 사용자가 직접 실행). RAG도 같은 작업으로 커밋 ID가 바뀌었다.
+  - `uv lock --upgrade`: langgraph 1.2.9→1.2.16, anthropic 0.118.0→2.1.0, sentence-transformers 5.6.0→6.2.0, rag `1603ca9`(기록 정리로 사라진 커밋)→ 새 커밋.
+  - 모델 목록을 최신으로: `claude-opus-5-5`(기본), `claude-sonnet-5-5`, `claude-haiku-4-5`, `claude-fable-5-1`. `claude-cli` 백엔드의 별칭(opus/sonnet/haiku)은 그대로.
+  - `tests/test_anthropic_backend.py` 추가: 실제 anthropic SDK로 `_anthropic_complete`·`_anthropic_bool`(구조화 출력 `output_config`)의 요청·응답을 오프라인으로 확인.
+- **이유/결정**: `uv.lock`이 고정한 RAG 커밋(`1603ca9`)이 기록 정리로 GitHub에서 사라져, 새로 clone하면 `uv sync`가 실패하는 상태였다. anthropic이 메이저 버전으로 올라 API 경로 호환을 확인할 테스트가 필요했다.
+- **결과**: `uv run pytest -q` → 41 passed. anthropic 2.x는 HTTP 클라이언트로 `httpx2`를 쓴다(테스트는 둘 다 지원).
+- **주의**: RAG를 다시 push하면 `uv lock --upgrade-package rag`로 새 커밋을 다시 잠가야 한다.
+
+### 2026-07-30 — 멀티 에이전트 코딩 팀 (코드 생성·테스트·실행·검토)
+- **한 일**:
+  - 사용자 목표: AI들이 역할을 나눠 코딩하고 **서로 검증**(코드 생성→테스트→검증). 코드는 실행·테스트로 객관적 검증이 되므로 검증 루프가 실제로 정확도를 올리는 도메인. `examples/code_team.py` 추가.
+  - 팀(LangGraph 노드): `write_tests`(🧪 테스터, pytest를 먼저 작성=정답 정의) → `write_code`(⌨️ 작성자) → `run_tests`(▶️ 실행기 **도구**: 임시폴더+타임아웃으로 **실제 pytest 실행** → 통과/실패 객관 판정) → 실패면 오류 받아 수정 루프 / 통과면 `review`(🔍 검토자, **다른 모델**) → REVISE면 수정 루프 / APPROVE·예산소진이면 END. 상한 `MAX_ATTEMPTS=4`.
+  - 작성자·검토자·테스터 모델 각각 선택(`--coder-model`/`--reviewer-model`/`--tester-model`).
+  - **⚠️ 보안**: LLM 생성 코드를 실제 실행하므로 격리 주의(파일 docstring에 경고 명시). 로컬 신뢰 작업용, 민감 환경은 컨테이너 권장.
+  - 테스트: `tests/test_code_team.py` 3건 — 통과 도달 / **실패→수정 루프**(실제 pytest가 버그를 잡아냄) / 코드추출. subprocess pytest 실제 실행.
+- **결과**: `uv run pytest -q` → **39 passed**. 실행: `uv run python examples/code_team.py "함수 만들어줘"`.
+- **남은 것**: (선택) 코딩 팀을 대시보드/메뉴에 통합. 커밋+push 대기 → 2026-10-22 커밋.
+
+### 2026-07-30 — 심플 "팀" 구성: 작성자/검토자 모델 분리 (+ 멀티에이전트 추세 조사)
+- **한 일**:
+  - 사용자 목표: "LLM이 LLM을 검증해 신빙성↑, AI를 팀원처럼 쓰고 사람이 팀장." 그 심플 버전으로 **작성자(generate)·검토자(critique)에 서로 다른 모델**을 고를 수 있게 함(맹점이 달라야 자기검증이 의미 있음).
+  - `examples/self_reflection.py`: `_critic_model(state)` 추가(없으면 작성자 `model`로 폴백). `critique` 노드가 검토자 모델로 동작. CLI `--critic-model`.
+  - 루프 대시보드(`self_reflection_web.py`) + 통합 대시보드(`menu_web.py`) 루프 모드: **"검토자 모델" 드롭다운** 추가, `critic_model` 파라미터 전달, done에 작성/검토 모델 표시.
+  - 테스트: 작성자=writer-m / 검토자=critic-m 로 각 노드에 다른 모델이 실제 전달되는지 확인.
+- **결과**: `uv run pytest -q` → **36 passed**.
+- **추세 조사(2026, 대화 내 WebSearch)**: 멀티에이전트는 LangGraph 전용이 아님. 3강 = **LangGraph**(제어·상태·그래프, production-grade) / **CrewAI**(역할기반 "crew=팀", 가장 빠른 프로토타입) / **AutoGen**(대화형, MS는 Microsoft Agent Framework로 이전). + **Claude Agent SDK**(Anthropic 네이티브), **OpenAI Agents SDK**. LangGraph 선택은 타당(특히 검증 루프처럼 제어가 중요한 경우). "팀/역할" 추상화를 원하면 CrewAI가 대안.
+- **남은 것**: 커밋+push(대량 대기) → 2026-10-22 커밋. 더 큰 팀(B: 사실확인 RAG, C: 팀장 승인 human-in-the-loop)은 다음 단계.
+
+### 2026-07-29 — 메뉴 통합 대시보드 (검증 루프 / RAG+검증을 한 화면에서 선택)
+- **한 일**:
+  - 사용자가 "대시보드에 메뉴를 두고 골라 쓰고 싶다"고 함. `examples/menu_web.py` 추가: 상단 메뉴로 두 모드 전환 — 🔁 검증 루프(`self_reflection` 그래프, RAG 없음) / 🔍 RAG+검증(`adaptive_rag` 그래프). **기존 두 대시보드의 페이지(`render_page`)와 그래프를 그대로 재사용**하고 메뉴바만 얹음(리스크 최소). `/stream`은 파라미터로 모드 구분(`task=`→루프, `question=`→RAG). `--source` 있으면 RAG 메뉴 활성, 없으면 검증 루프만.
+  - `dashboard.py`가 이제 이 메뉴 대시보드를 띄움: `dashboard.py`=RAG(llm_wiki)+루프 메뉴, `dashboard.py --loop`=검증 루프만(`--source` 미전달), `dashboard.py --source <폴더>`=그 폴더로 RAG.
+  - 테스트: `tests/test_menu_web.py` 4건(RAG/루프 페이지에 메뉴바+SVG, 두 스트림 done), `test_dashboard.py`를 menu_web 포워딩으로 갱신.
+- **결과**: `uv run pytest -q` → **35 passed**. 기존 `examples/self_reflection_web.py`·`adaptive_rag.web`는 그대로 유지(메뉴 대시보드가 재사용).
+- **남은 것**: 커밋 + push (대량 대기 중) → 2026-10-22 커밋.
+
+### 2026-07-27 — RAG 없는 LangGraph 예제 추가 (self-reflection 루프)
+- **한 일**:
+  - 사용자가 "RAG 없이 LangGraph 자체를 쓰고 싶다"고 하고, LangGraph 개념도 "여러 번 검증해 더 나은 답을 찾는 방법론"으로 오해 → 개념 정정(그래프 오케스트레이션 틀, 검증 루프는 그중 한 패턴) 후, 검색 없는 최소 예제를 추가.
+  - `examples/self_reflection.py` — `generate`(초안) → `critique`(자기 비평, GOOD/REVISE 판정) → 조건부 엣지로 부족하면 재생성하는 루프. 상한 `MAX_DRAFTS=3`으로 항상 종료. LangGraph 핵심(State/노드/조건부 엣지/loop)만 보여주고 RAG 미사용.
+  - `llm.py`에 백엔드 중립 공개 헬퍼 `complete(prompt, model=None)` + `default_model()` 추가(예제가 RAG 전용 함수 대신 재사용). claude-cli 기본이라 API 키 불필요.
+  - `examples/__init__.py`, `tests/test_self_reflection.py`(GOOD 즉시 종료 / 항상 REVISE→상한 종료 / REVISE 후 GOOD 3케이스).
+  - 비교용 `examples/self_reflection_while.py`(같은 루프를 LangGraph 없이 순수 `while`로) + `tests/test_self_reflection_while.py` 2건. "단일 루프면 while로 충분, 분기·상태가 복잡해지면 LangGraph"를 코드로 나란히 보여줌.
+  - 시각 대시보드 아티팩트(루프 시각화 + while/graph 코드 비교, 모의 실행, 노드에 영어+한글 라벨): https://claude.ai/code/artifact/d0f4df89-1a0e-4955-8e15-be31e8e3b136
+  - **실행 가능한 로컬 웹 대시보드** `examples/self_reflection_web.py`(표준 라이브러리 HTTP+SSE, RAG 대시보드와 동일 방식이나 검색 없음). 그래프 노드에 영어+한글 라벨(START=시작, generate=초안 생성, critique=자기 비평, END=종료), REVISE 되돌이 엣지 하이라이트, 라이브 답변. `tests/test_self_reflection_web.py` 3건(페이지+한글라벨 / 루프 스트림 / 빈 입력 오류).
+  - **런처 통합**: 대시보드가 2개(RAG / 자기검토 루프)라 헷갈릴 수 있어, `dashboard.py`에 `--loop` 플래그 추가. `dashboard.py`=RAG, `dashboard.py --loop`=자기검토 루프(내부적으로 `self_reflection_web.main` 호출, `--source` 무시). loop 대시보드도 `--model`(ADAPTIVE_RAG_WEB_MODEL)로 드롭다운 기본 선택 반영.
+- **결과**: `uv run pytest -q` → **31 passed**. 실행: RAG `uv run python dashboard.py`, 자기검토 루프 `uv run python dashboard.py --loop` (둘 다 기본 http://127.0.0.1:8000 — 동시 실행 시 포트 충돌하니 `--port`로 분리). CLI: `uv run python examples/self_reflection.py "질문"`(또는 `_while`).
+- **남은 것**: (선택) 실제 claude-cli 라이브 시연 미수행(구독 호출 발생). 커밋은 사용자 요청대로 다른 변경과 함께 일괄 예정.
+
+### 2026-07-26 — 대시보드 간편 실행 런처(dashboard.py) 추가
+- **한 일**:
+  - 매번 긴 명령 대신 `uv run python dashboard.py` 한 줄로 대시보드 실행. 편의 기본값(source=llm_wiki, host=0.0.0.0, backend=claude-cli) + `--source`/`--model`/`--port`/`--local`(이 기기만) 옵션. `adaptive_rag.web.main`에 기본값을 채워 넘기는 얇은 래퍼(루트 `dashboard.py`).
+  - `web.py`에 `--model`(시작 선택 모델) 추가: env `ADAPTIVE_RAG_WEB_MODEL`로 드롭다운 **기본 선택**만 바꾸고, 실행 후 요청별 실시간 변경은 그대로. RUN.md 섹션 1을 런처 우선으로 개편.
+- **결과**: `uv run pytest -q` → **22 passed**(런처 argv 전달 2 + 시작모델 프리셀렉트 2 추가). `tests/conftest.py`로 루트를 import 경로에 추가(런처가 패키지 밖 스크립트라).
+- **남은 것**: 커밋 + push(사용자 승인 대기). 원하면 실행 시 대화형 모델 메뉴로도 확장 가능(현재는 `--model` 플래그).
 
 ### 2026-07-26 — 웹 대시보드 리디자인 (외부 LangGraph 대시보드 참고) + 원격 연결·push
 - **한 일**:
@@ -83,7 +147,7 @@ end-to-end를 실제 검증했다(정답+근거, API 키 없음). 오프라인 p
   - **rag 의존성을 로컬 경로 → GitHub git 의존성으로 전환**: RAG가 public(`https://github.com/hustudy1/RAG.git`, `git ls-remote`로 확인)이라 `pyproject.toml` `[tool.uv.sources]`를 `rag = { git = "...", branch = "main" }`로 변경. `uv sync` → rag를 git에서 빌드·설치 확인(`uv.lock`에 커밋 `1603ca9...` 고정). 로컬 편집 개발용으로 `path`로 되돌리는 법을 pyproject 주석으로 남김.
   - **하드코딩된 `~/...` 경로 제거**: `RUN.md`·`GUIDE.md`의 `cd ~/langgraph` → `cd adaptive-rag`(클론 폴더), RAG 폴더 전제조건/트러블슈팅을 "uv sync가 GitHub에서 자동 수신"으로 갱신, `claude` 절대경로 예시를 `.../claude`로 일반화. `web.py`의 게이트웨이 연결 오류 메시지에 있던 `cli_gateway.py` 절대경로 제거(일반 안내 + `--backend claude-cli` 대안 안내).
   - `README.md` 설치·구조 섹션을 git 의존성/클론 후 `uv sync`로 갱신.
-- **결과**: `uv sync`로 rag가 git에서 설치됨(venv의 site-packages, 더 이상 `../RAG` 아님). `uv run pytest -q` → 18 passed. 저장소 내 코드에 남은 `/Users/data1` 절대경로 없음(내부 로그성 문서인 HANDOVER의 일부 환경 사실 기록은 제외).
+- **결과**: `uv sync`로 rag가 git에서 설치됨(venv의 site-packages, 더 이상 `../RAG` 아님). `uv run pytest -q` → 18 passed. 저장소 내 코드에 남은 `~` 절대경로 없음(내부 로그성 문서인 HANDOVER의 일부 환경 사실 기록은 제외).
 - **남은 것**: 원격 push (사용자 승인 필요) — `git init` + 첫 커밋은 2026-07-26 완료(`db999a9`). RAG의 최신 코드가 GitHub에 반영돼 있어야 git 의존성이 그 버전을 받음(현재 RAG 로컬=origin/main 일치).
 - **실패한 시도**: `rm 실행방법.md`(옛 한글 파일명 문서) 삭제는 권한 거부됨 → 사용자가 직접 삭제하기로.
 
@@ -186,6 +250,7 @@ end-to-end를 실제 검증했다(정답+근거, API 키 없음). 오프라인 p
 | 2026-07-23 | 그래프 형태: Corrective/Adaptive RAG | LangGraph의 조건부 분기·재시도 루프를 살려 `RAGIndex.answer()` 한 방향 흐름 대비 이점 확보 | 사용자 선택(AskUserQuestion) |
 | 2026-07-23 | 인터페이스: CLI 단발 질의 | 가장 단순·확실하게 동작 검증 가능. 대화형/메모리는 후속 과제로 분리 | 사용자 선택(AskUserQuestion) |
 | 2026-07-23 | LLM: anthropic SDK 직접 사용, langchain 미도입 | 의존성 최소화, rag의 generation.py와 동일 방식 유지 | 설계 판단 |
+| 2026-10-22 | 기본 모델 `claude-opus-5-5` | 최신 Opus. rag의 `DEFAULT_ANSWER_MODEL`과 같게 유지 | Claude 모델 목록(2026-10 기준) |
 | 2026-07-23 | 모델 `claude-opus-4-8` | rag의 `DEFAULT_ANSWER_MODEL`과 통일해 두 프로젝트 정합성 유지 | `~/RAG/src/rag/constants.py`, claude-api 스킬 |
 | 2026-07-23 | 평가 노드에 구조화 출력 사용 | 자유 텍스트 대신 boolean JSON으로 파싱 오류 없이 분기 | claude-api 스킬(Structured Outputs) |
 

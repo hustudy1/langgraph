@@ -8,16 +8,16 @@ how many retries, how many chunks) can be read and tuned in one place.
 # answer generation, answer grading). Matches the model the `rag` library uses
 # for its own optional answer generation, so the two stay in sync. The CLI
 # (--model) and the web dashboard (dropdown) can override this per run.
-ANSWER_MODEL = "claude-opus-4-8"
+ANSWER_MODEL = "claude-opus-5-5"
 
 # Models offered in the dashboard dropdown / accepted by --model, as
 # (model_id, human_label) pairs. Ordered most-capable-and-costly first. Keep
 # `ANSWER_MODEL` present in this list.
 AVAILABLE_MODELS = [
-    ("claude-opus-4-8", "Claude Opus 4.8 — 가장 똑똑 (기본)"),
-    ("claude-sonnet-5", "Claude Sonnet 5 — 균형, 더 저렴"),
+    ("claude-opus-5-5", "Claude Opus 5.5 — 가장 똑똑 (기본)"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5 — 균형, 더 저렴"),
     ("claude-haiku-4-5", "Claude Haiku 4.5 — 가장 빠르고 저렴"),
-    ("claude-fable-5", "Claude Fable 5 — 최고 성능, 가장 비쌈"),
+    ("claude-fable-5-1", "Claude Fable 5.1 — 최고 성능, 가장 비쌈"),
 ]
 
 # Set of valid model ids, for server-side validation of user input.

@@ -32,7 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--model",
         default=None,
-        help="LLM 노드가 쓸 모델. api 백엔드는 claude-opus-4-8 같은 전체 ID, "
+        help="LLM 노드가 쓸 모델. api 백엔드는 claude-opus-5-5 같은 전체 ID, "
         "claude-cli 백엔드는 opus/sonnet/haiku 별칭. 생략 시 백엔드 기본값.",
     )
     parser.add_argument(
